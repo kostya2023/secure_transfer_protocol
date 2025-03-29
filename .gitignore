@@ -1,0 +1,5 @@
+/venv
+/build
+/dist
+/lin_venv
+/secure_transfer_protocol.egg-info

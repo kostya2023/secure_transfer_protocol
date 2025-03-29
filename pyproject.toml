@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "secure_transfer_protocol"
+version = "1.0.0"
+description = "Secure Transfer Protocol with Post-Quantum Cryptography"
+readme = "README.md"
+authors = [
+    { name = "Konstantin Gorshkov", email = "kostya_gorshkov_06@vk.com" }
+]
+license = { text = "MIT" }
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Rust",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: Microsoft :: Windows",
+    "Topic :: Security :: Cryptography"
+]
+keywords = ["quantum", "encryption", "secure-transfer"]
+requires-python = ">=3.12"
+
+dependencies = [
+    "cffi>=1.17.1",
+    "colorama>=0.4.6",
+    "cryptography>=44.0.2",
+    "dilithium_python>=0.1.0",
+    "ntplib>=0.4.0",
+    "pycparser>=2.22",
+    "PythonKyber>=1.0.1"
+]
+
+[project.urls]
+Repository = "https://github.com/kostya2023/secure_transfer_protocol"
+
+[tool.setuptools]
+packages = ["secure_transfer_protocol"]  # Указываем только нужный пакет
