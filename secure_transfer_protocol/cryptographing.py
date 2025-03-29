@@ -84,7 +84,12 @@ class Crypting:
         try:
             if not os.path.exists(filename):
                 logger.warning(f"{filename} not found, creating new")
-                return Crypting.create_my_peer_info()
+                my_peer_info = Crypting.create_my_peer_info()
+                my_peer_info = json.dumps(my_peer_info)
+                with open(filename, "w") as file:
+                    file.write(my_peer_info)
+                logger.info(f"New {filename} created.")
+                return my_peer_info
                 
             with open(filename, "r") as f:
                 data = json.load(f)
