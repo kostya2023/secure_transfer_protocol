@@ -7,25 +7,34 @@ init(autoreset=True)
 class STPLogger:
     """Кастомный логгер для Secure Transfer Protocol"""
     
+    _initialized = False  # Флаг для отслеживания инициализации
+    
     def __init__(self, name="STP_logger"):
         self.logger = logging.getLogger(name)
         self.logger.setLevel(logging.DEBUG)
         
-        # Форматтер с цветами для консоли
-        console_formatter = logging.Formatter(
-            f"{Fore.CYAN}%(asctime)s{Style.RESET_ALL} | "
-            f"{Fore.MAGENTA}%(name)s{Style.RESET_ALL} | "
-            f"{Style.BRIGHT}%(levelname)s{Style.RESET_ALL} | "
-            f"%(message)s"
-        )
+        # Добавляем обработчики только при первом создании логгера
+        if not STPLogger._initialized:
+            # Форматтер с цветами для консоли
+            console_formatter = logging.Formatter(
+                f"{Fore.CYAN}%(asctime)s{Style.RESET_ALL} | "
+                f"{Fore.MAGENTA}%(name)s{Style.RESET_ALL} | "
+                f"{Style.BRIGHT}%(levelname)s{Style.RESET_ALL} | "
+                f"%(message)s"
+            )
 
-        
-        # Обработчик для консоли
-        console_handler = logging.StreamHandler(sys.stdout)
-        console_handler.setFormatter(console_formatter)
-        
-        # Добавляем обработчики
-        self.logger.addHandler(console_handler)
+            # Обработчик для консоли
+            console_handler = logging.StreamHandler(sys.stdout)
+            console_handler.setFormatter(console_formatter)
+            
+            # Удаляем все старые обработчики (на случай переиспользования логгера)
+            for handler in self.logger.handlers[:]:
+                self.logger.removeHandler(handler)
+                
+            # Добавляем новый обработчик
+            self.logger.addHandler(console_handler)
+            
+            STPLogger._initialized = True  # Помечаем как инициализированное
         
         # Уровни логирования с цветами
         self.level_colors = {
