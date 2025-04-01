@@ -4,8 +4,8 @@ import time
 from secure_transfer_protocol.logger import STPLogger
 
 
-
 logger = STPLogger()
+
 
 class Time:
     _instance = None
@@ -22,10 +22,13 @@ class Time:
         logger.info("Initializing time synchronization")
         self._ntp_time_start = time.time()
         self._perf_start = time.perf_counter()
-        self._resync_interval = 600  # 10 min
+        self._resync_interval = 600
         self._is_running = True
         self._sync_with_ntp()
-        thread = threading.Thread(target=self._resync_loop, daemon=True)
+        thread = threading.Thread(
+            target=self._resync_loop,
+            daemon=True
+        )
         thread.start()
         logger.info("Time synchronization started")
 
@@ -71,3 +74,4 @@ class Time:
     def stop(self):
         self._is_running = False
         logger.info("Time synchronization stopped")
+

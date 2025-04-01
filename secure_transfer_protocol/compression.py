@@ -5,12 +5,10 @@ import base64
 from secure_transfer_protocol.logger import STPLogger
 
 
-
 logger = STPLogger()
 
-class Compression:
-    """Класс для сжатия и распаковки данных."""
 
+class Compression:
     @staticmethod
     def compress(data: str, algorithm: str = "gzip") -> str:
         logger.debug(f"Compressing data with {algorithm}")
@@ -24,7 +22,7 @@ class Compression:
                 compressed_data = bz2.compress(data_bytes)
             else:
                 raise ValueError(f"Unsupported algorithm: {algorithm}")
-            
+
             logger.debug("Data compressed successfully")
             return base64.b64encode(compressed_data).decode()
         except Exception as e:
@@ -44,9 +42,10 @@ class Compression:
                 decompressed_data = bz2.decompress(compressed_data)
             else:
                 raise ValueError(f"Unsupported algorithm: {algorithm}")
-            
+
             logger.debug("Data decompressed successfully")
             return decompressed_data.decode()
         except Exception as e:
             logger.error(f"Decompression failed: {str(e)}")
             raise Exception(f"Decompression error: {str(e)}")
+

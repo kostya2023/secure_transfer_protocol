@@ -1,5 +1,5 @@
 from secure_transfer_protocol.compression import Compression
-from secure_transfer_protocol.cryptographing import Crypting
+from secure_transfer_protocol.cryptographing import Crypting, Nonce
 from secure_transfer_protocol.logger import STPLogger
 from secure_transfer_protocol.time_sync import Time
 import base64
@@ -11,13 +11,15 @@ from typing import Optional
 
 logger = STPLogger()
 
+
 class Transmission:
     """Класс для защищенной передачи данных."""
     
-    def __init__(self, is_server: bool = False, host: str = "127.0.0.1", port: int = 12345):
+    def __init__(self, is_server: bool = False, host: str = "127.0.0.1", port: int = 12345, target_ip: Optional[str] = None):
         self.is_server = is_server
         self.host = host
         self.port = port
+        self.target_ip = target_ip  # Ожидаемый IP-адрес для верификации
         self.my_socket = None
         self.another_socket = None
         self.public_key = None
@@ -30,9 +32,18 @@ class Transmission:
         self.time_sync = None
         self.my_peer_info = None
         self.another_peer_info = None
+        self.nonce_manager = Nonce()
         
         role = "server" if is_server else "client"
         logger.info(f"Initializing {role} on {host}:{port}")
+
+    def _get_peer_ip(self) -> str:
+        """Возвращает IP-адрес подключенного пира"""
+        if self.is_server and self.another_socket:
+            return self.another_socket.getpeername()[0]
+        elif not self.is_server and self.my_socket:
+            return self.my_socket.getpeername()[0]
+        return ""
 
     def init(self):
         try:
@@ -72,24 +83,37 @@ class Transmission:
         self.another_socket, addr = self.my_socket.accept()
         logger.info(f"Connection accepted from {addr}")
 
+        # Верификация IP-адреса
+        if self.target_ip:
+            peer_ip = addr[0]
+            if peer_ip != self.target_ip:
+                logger.critical(f"IP verification failed! Expected: {self.target_ip}, got: {peer_ip}")
+                self.another_socket.close()
+                raise ConnectionAbortedError("IP address verification failed")
+
         # Handshake0 - HWID verification
         logger.debug("Starting HWID verification")
         data = self.another_socket.recv(32768)
         if not data:
             raise Exception("No data received from client")
 
-        message, timeset, hwid = base64.b64decode(data).decode().split("|")
+        message, timeset, hwid, nonce = base64.b64decode(data).decode().split("|")
         if message != "START_HANDSHAKE0":
             raise ValueError("Invalid handshake initiation")
+
+        if not self.nonce_manager.verify_nonce(nonce):
+            raise ValueError("Invalid or reused nonce")
+        self.nonce_manager.add_nonce(nonce)
 
         if hwid != self.another_peer_info['HWID']:
             raise ValueError("HWID verification failed")
 
-        response = f"HANDSHAKE0_OK|{self.time_sync.get_time()}"
+        response = f"HANDSHAKE0_OK|{self.time_sync.get_time()}|{self.nonce_manager.generate_nonce()}"
         self.another_socket.sendall(base64.b64encode(response.encode()))
         logger.info("HWID verified successfully")
 
         # Handshake1 - Key exchange
+        handshake_nonce = self.nonce_manager.generate_nonce()
         public_kyber_key, private_kyber_key = PythonKyber.Kyber1024.generate_keypair()
         public_kyber_key_b64 = base64.b64encode(public_kyber_key).decode()
         signature = Crypting.sign_message(self.private_key, public_kyber_key_b64)
@@ -98,12 +122,17 @@ class Transmission:
             "step": "HANDSHAKE1",
             "public_key": public_kyber_key_b64,
             "signature": signature,
-            "timeset": self.time_sync.get_time()
+            "timeset": self.time_sync.get_time(),
+            "nonce": handshake_nonce
         }
         self.another_socket.sendall(json.dumps(packet).encode())
         logger.debug("Sent handshake1 packet")
 
         response = json.loads(self.another_socket.recv(32768).decode())
+        if not self.nonce_manager.verify_nonce(response.get("nonce", "")):
+            raise ValueError("Invalid or reused nonce")
+        self.nonce_manager.add_nonce(response["nonce"])
+
         if not Crypting.verify_signature(self.another_public_key, response["ciphertext"], response["signature"]):
             raise ValueError("Signature verification failed")
 
@@ -112,6 +141,7 @@ class Transmission:
         logger.info("Level 1 key established")
 
         # Handshake2 - Second key exchange
+        handshake_nonce2 = self.nonce_manager.generate_nonce()
         public_kyber_key2, private_kyber_key2 = PythonKyber.Kyber1024.generate_keypair()
         signature2 = Crypting.sign_message(self.private_key, base64.b64encode(public_kyber_key2).decode())
 
@@ -119,12 +149,17 @@ class Transmission:
             "step": "HANDSHAKE2",
             "public_kyber_key": base64.b64encode(public_kyber_key2).decode(),
             "signature": signature2,
-            "timeset": self.time_sync.get_time()
+            "timeset": self.time_sync.get_time(),
+            "nonce": handshake_nonce2
         }
         self.another_socket.sendall(json.dumps(packet2).encode())
         logger.debug("Sent handshake2 packet")
 
         response2 = json.loads(self.another_socket.recv(32768).decode())
+        if not self.nonce_manager.verify_nonce(response2.get("nonce", "")):
+            raise ValueError("Invalid or reused nonce")
+        self.nonce_manager.add_nonce(response2["nonce"])
+
         if not Crypting.verify_signature(self.another_public_key, response2["ciphertext"], response2["signature"]):
             raise ValueError("Signature verification failed")
 
@@ -133,6 +168,7 @@ class Transmission:
         logger.info("Level 2 key established")
 
         # Handshake3 - HMAC key exchange
+        handshake_nonce3 = self.nonce_manager.generate_nonce()
         public_kyber_key3, private_kyber_key3 = PythonKyber.Kyber1024.generate_keypair()
         signature3 = Crypting.sign_message(self.private_key, base64.b64encode(public_kyber_key3).decode())
 
@@ -140,12 +176,17 @@ class Transmission:
             "step": "HANDSHAKE3",
             "public_kyber_key": base64.b64encode(public_kyber_key3).decode(),
             "signature": signature3,
-            "timeset": self.time_sync.get_time()
+            "timeset": self.time_sync.get_time(),
+            "nonce": handshake_nonce3
         }
         self.another_socket.sendall(json.dumps(packet3).encode())
         logger.debug("Sent handshake3 packet")
 
         response3 = json.loads(self.another_socket.recv(32768).decode())
+        if not self.nonce_manager.verify_nonce(response3.get("nonce", "")):
+            raise ValueError("Invalid or reused nonce")
+        self.nonce_manager.add_nonce(response3["nonce"])
+
         if not Crypting.verify_signature(self.another_public_key, response3["ciphertext"], response3["signature"]):
             raise ValueError("Signature verification failed")
 
@@ -153,22 +194,46 @@ class Transmission:
         self.key_level_3 = base64.b64encode(PythonKyber.Kyber1024.decapsulate(private_kyber_key3, ciphertext3)).decode()
         logger.info("Level 3 key established")
 
+
     def _client_handshake(self):
         logger.info("Starting client-side handshake")
         self.my_socket.connect((self.host, self.port))
 
+        # Верификация IP-адреса
+        if self.target_ip:
+            peer_ip = self._get_peer_ip()
+            if peer_ip != self.target_ip:
+                logger.critical(f"IP verification failed! Expected: {self.target_ip}, got: {peer_ip}")
+                self.my_socket.close()
+                raise ConnectionAbortedError("IP address verification failed")
+
         # Handshake0 - HWID verification
         logger.debug("Starting HWID verification")
-        start_packet = f"START_HANDSHAKE0|{self.time_sync.get_time()}|{self.my_peer_info['HWID']}"
+        start_nonce = self.nonce_manager.generate_nonce()
+        start_packet = f"START_HANDSHAKE0|{self.time_sync.get_time()}|{self.my_peer_info['HWID']}|{start_nonce}"
         self.my_socket.sendall(base64.b64encode(start_packet.encode()))
 
-        response, timeset = base64.b64decode(self.my_socket.recv(32768)).decode().split("|")
-        if response != "HANDSHAKE0_OK":
+        response = base64.b64decode(self.my_socket.recv(32768)).decode()
+        parts = response.split("|")
+        if len(parts) < 3:
+            raise ValueError("Invalid response format")
+            
+        response_msg, timeset, nonce = parts[0], parts[1], parts[2]
+        if response_msg != "HANDSHAKE0_OK":
             raise ValueError("HWID verification failed")
+
+        if not self.nonce_manager.verify_nonce(nonce):
+            raise ValueError("Invalid or reused nonce")
+        self.nonce_manager.add_nonce(nonce)
+
         logger.info("HWID verified successfully")
 
         # Handshake1 - Key exchange
         packet1 = json.loads(self.my_socket.recv(32768).decode())
+        if not self.nonce_manager.verify_nonce(packet1.get("nonce", "")):
+            raise ValueError("Invalid or reused nonce")
+        self.nonce_manager.add_nonce(packet1["nonce"])
+
         if not Crypting.verify_signature(self.another_public_key, packet1["public_key"], packet1["signature"]):
             raise ValueError("Signature verification failed")
 
@@ -181,13 +246,18 @@ class Transmission:
             "step": "HANDSHAKE1",
             "ciphertext": base64.b64encode(ciphertext).decode(),
             "signature": signature,
-            "timeset": self.time_sync.get_time()
+            "timeset": self.time_sync.get_time(),
+            "nonce": self.nonce_manager.generate_nonce()
         }
         self.my_socket.sendall(json.dumps(response1).encode())
         logger.info("Level 1 key established")
 
         # Handshake2 - Second key exchange
         packet2 = json.loads(self.my_socket.recv(32768).decode())
+        if not self.nonce_manager.verify_nonce(packet2.get("nonce", "")):
+            raise ValueError("Invalid or reused nonce")
+        self.nonce_manager.add_nonce(packet2["nonce"])
+
         if not Crypting.verify_signature(self.another_public_key, packet2["public_kyber_key"], packet2["signature"]):
             raise ValueError("Signature verification failed")
 
@@ -200,13 +270,18 @@ class Transmission:
             "step": "HANDSHAKE2",
             "ciphertext": base64.b64encode(ciphertext2).decode(),
             "signature": signature2,
-            "timeset": self.time_sync.get_time()
+            "timeset": self.time_sync.get_time(),
+            "nonce": self.nonce_manager.generate_nonce()
         }
         self.my_socket.sendall(json.dumps(response2).encode())
         logger.info("Level 2 key established")
 
         # Handshake3 - HMAC key exchange
         packet3 = json.loads(self.my_socket.recv(32768).decode())
+        if not self.nonce_manager.verify_nonce(packet3.get("nonce", "")):
+            raise ValueError("Invalid or reused nonce")
+        self.nonce_manager.add_nonce(packet3["nonce"])
+
         if not Crypting.verify_signature(self.another_public_key, packet3["public_kyber_key"], packet3["signature"]):
             raise ValueError("Signature verification failed")
 
@@ -219,7 +294,8 @@ class Transmission:
             "step": "HANDSHAKE3",
             "ciphertext": base64.b64encode(ciphertext3).decode(),
             "signature": signature3,
-            "timeset": self.time_sync.get_time()
+            "timeset": self.time_sync.get_time(),
+            "nonce": self.nonce_manager.generate_nonce()
         }
         self.my_socket.sendall(json.dumps(response3).encode())
         logger.info("Level 3 key established")
@@ -254,13 +330,14 @@ class Transmission:
                 "step": "SEND",
                 "message": encrypted2,
                 "signature": signature,
-                "timeset": self.time_sync.get_time()
+                "timeset": self.time_sync.get_time(),
+                "nonce": self.nonce_manager.generate_nonce()  # Добавлен nonce
             }
             packet_json = json.dumps(packet)
             
             # Send size first
-            size_msg = f"SEND_DATA|{len(packet_json)}"
-            logger.debug(f"Sending size: {size_msg}")
+            size_msg = f"SEND_DATA|{len(packet_json)}|{self.nonce_manager.generate_nonce()}"  # Добавлен nonce
+            logger.debug(f"Sending size packet...")
             (self.another_socket if self.is_server else self.my_socket).sendall(size_msg.encode())
             
             # Wait for ACK
@@ -286,7 +363,8 @@ class Transmission:
                 try:
                     end_packet = {
                         "step": "END_SESSION",
-                        "timeset": self.time_sync.get_time()
+                        "timeset": self.time_sync.get_time(),
+                        "nonce": self.nonce_manager.generate_nonce()  # Добавлен nonce
                     }
                     (self.another_socket if self.is_server else self.my_socket).sendall(json.dumps(end_packet).encode())
                     logger.debug("Sent END_SESSION notification")
@@ -330,7 +408,17 @@ class Transmission:
             if "|" not in size_info:
                 raise ValueError("Invalid size info format")
                 
-            _, size = size_info.split("|")
+            parts = size_info.split("|")
+            if len(parts) < 2:
+                raise ValueError("Invalid size info format")
+                
+            _, size, nonce = parts[0], parts[1], parts[2] if len(parts) > 2 else ""
+            
+            if nonce and not self.nonce_manager.verify_nonce(nonce):
+                raise ValueError("Invalid or reused nonce")
+            if nonce:
+                self.nonce_manager.add_nonce(nonce)
+            
             logger.debug(f"Receiving packet of size: {size}")
             
             # Send ACK
@@ -342,12 +430,20 @@ class Transmission:
             
             # Проверка на сообщение о завершении сеанса
             if packet.get("step") == "END_SESSION":
+                if not self.nonce_manager.verify_nonce(packet.get("nonce", "")):
+                    raise ValueError("Invalid or reused nonce")
+                self.nonce_manager.add_nonce(packet["nonce"])
+                
                 logger.info("Received END_SESSION packet, closing connection")
                 self.close()
                 return None
                 
             if packet["step"] != "SEND":
                 raise ValueError("Invalid packet type")
+                
+            if not self.nonce_manager.verify_nonce(packet.get("nonce", "")):
+                raise ValueError("Invalid or reused nonce")
+            self.nonce_manager.add_nonce(packet["nonce"])
                 
             if not Crypting.verify_signature(self.another_public_key, packet["message"], packet["signature"]):
                 raise ValueError("Signature verification failed")
@@ -388,10 +484,13 @@ class Transmission:
             logger.error(f"Exception occurred: {str(exc_val)}")
         return False
 
+
     def get_connection_info(self) -> dict:
         """Возвращает информацию о соединении"""
+        peer_ip = self._get_peer_ip() if self.handshake_pass else None
         return {
             "handshake_completed": self.handshake_pass,
+            "peer_ip": peer_ip,
             "peer_hwid": self.another_peer_info["HWID"] if self.another_peer_info else None,
             "keys_established": all(k is not None for k in [self.key_1_level, self.key_2_level, self.key_level_3])
         }

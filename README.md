@@ -21,23 +21,6 @@
 pip install secure-transfer-protocol
 ```
 
-### Пример использования
-```python
-from secure_transfer_protocol import Transmission
-
-# Серверная часть
-with Transmission(is_server=True, port=12345) as server:
-    server.handshake()
-    server.send("Секретные данные")
-    print(server.recv())
-
-# Клиентская часть
-with Transmission(host="127.0.0.1", port=12345) as client:
-    client.handshake()
-    client.send("Ответные данные")
-    print(client.recv())
-```
-
 ## Документация
 ### Основные модули:
 1. **Transmission** - ядро передачи данных
@@ -45,6 +28,7 @@ with Transmission(host="127.0.0.1", port=12345) as client:
 3. **Compression** - сжатие данных
 4. **STPLogger** - система логирования
 5. **Time** - синхронизация времени
+6. **Nonce** - работа с nonce
 
 [Полная документация](docs/docs.md)
 
